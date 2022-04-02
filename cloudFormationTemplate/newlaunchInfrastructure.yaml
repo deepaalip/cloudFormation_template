@@ -1,0 +1,173 @@
+
+AWSTemplateFormatVersion: 2010-09-09
+Description:  This template deploys a VPC in either us-east1 or us-west-2, with a pair of public and private subnets spread
+  across two Availability Zones. It deploys an internet gateway, with a default
+  route on the public subnets, a Linux t2.micro Instance with Security Group with open HTTP access. 
+Parameters: 
+ImageId: 
+    Type: String
+    Description: Ubuntu AMI for N.virginia us-east1 Region
+    Default: ami- 0e472ba40eb589f49  
+InstanceType: 
+    Type: String
+    Description: Choosing  t2 micro because it is free
+    Default: t2.micro
+KeyName:
+    Description: SSH Keypair to login to the instance
+    Type: 'AWS::EC2::KeyPair::KeyName'
+    Default: AWS-demo
+TagKey:
+    Description: The EC2 tag key that identifies this as a target for deployments.
+    Type: String
+    Default: Name
+TagValue:
+    Description: The EC2 tag value that identifies this as a target for deployments.
+    Type: String
+    Default: WebserverEc2
+IamInstanceProfile:
+    Description: Role for code deployment for EC2 instance
+    Type: String
+    Default: 'arn:aws:iam::085781150237:instance-profile/EC2CodeDeployRole'
+SecurityGroupIds:
+    Description: Role for code deployment for EC2 instance
+    Type: String
+    Default: sg-0d4854b25d6d08204
+ServiceRoleArn:
+    Description: Role for code-deploy
+    Type: String
+    Default: 'arn:aws:iam::085781150237:role/CodeDeployRole'
+Subnet1: 
+    Description: Subnet of us-east-1a
+    Type: String
+    Default: subnet-0a15521707e14426d
+Subnet2: 
+    Description: Subnet of us-east-1b
+    Type: String
+    Default: subnet-06b50be8a72ee773e
+ConnectionArn:
+    Description: Codestar Connection Arn
+    Type: String
+    Default: >-
+      arn:aws:codestar-connections:us-east-1:085781150237:connection/26b4fdc6-9a81-469f-8409-104b3d042be2
+FullRepositoryId:
+    Description: GitHub Repository ID/Name
+    Type: String
+    Default: deepaalip/codedeploy-to-ec2-nodejs
+codePipelineRoleArn:
+    Description: IAM service role for codePipeline
+    Type: String
+    Default: >-
+      arn:aws:iam::085781150237:role/service-role/AWSCodePipelineServiceRole-us-east-1-nodejs-app
+
+
+Resources:
+  myLaunchTemplate:
+    Type: 'AWS::EC2::LaunchTemplate'
+    Properties:
+      LaunchTemplateName: MydemoProject
+      LaunchTemplateData:
+        IamInstanceProfile:
+          Arn:
+            Ref: IamInstanceProfile
+        DisableApiTermination: 'true'
+        ImageId:
+          Ref: ImageId
+        InstanceType:
+          Ref: InstanceType
+        KeyName:
+          Ref: KeyName
+        SecurityGroupIds:
+          - Ref: SecurityGroupIds
+  AutoScalingGroup:
+    Type: 'AWS::AutoScaling::AutoScalingGroup'
+    Properties:
+      AutoScalingGroupName: myAuto-SG
+      LaunchTemplate:
+        LaunchTemplateId:
+          Ref: myLaunchTemplate
+        Version:
+          'Fn::GetAtt':
+            - myLaunchTemplate
+            - DefaultVersionNumber
+      VPCZoneIdentifier:
+        - Ref: Subnet1
+        - Ref: Subnet2
+      HealthCheckGracePeriod: 300
+      DesiredCapacity: '1'
+      MinSize: '1'
+      MaxSize: '1'
+      Tags:
+        - Key:
+            Ref: TagKey
+          PropagateAtLaunch: true
+          Value:
+            Ref: TagValue
+  CodeDeployApplication:
+    Type: 'AWS::CodeDeploy::Application'
+    Properties:
+      ApplicationName: Nodejs Application
+      ComputePlatform: Server
+  CodeDeploymentGroup:
+    Type: 'AWS::CodeDeploy::DeploymentGroup'
+    Properties:
+      DeploymentGroupName: CodeDeploymentGroup
+      ApplicationName:
+        Ref: CodeDeployApplication
+      ServiceRoleArn:
+        Ref: ServiceRoleArn
+      Ec2TagFilters:
+        - Type: KEY_AND_VALUE
+          Key:
+            Ref: TagKey
+          Value:
+            Ref: TagValue
+  CodeStarConnection:
+    Type: 'AWS::CodeStarConnections::Connection'
+    Properties:
+      ConnectionName: Nodejs-Github-Connection
+      ProviderType: GitHub
+  CodePipeline:
+    Type: 'AWS::CodePipeline::Pipeline'
+    Properties:
+      Name: Express-Node-Pipeline
+      RestartExecutionOnUpdate: 'true'
+      RoleArn:
+        Ref: codePipelineRoleArn
+      ArtifactStore:
+        Type: S3
+        Location:
+          Ref: ArtifactStoreS3Location
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: SourceAction
+              ActionTypeId:
+                Version: '1'
+                Owner: AWS
+                Category: Source
+                Provider: CodeStarSourceConnection
+              OutputArtifacts:
+                - Name: SourceOutput
+              Configuration:
+                ConnectionArn:
+                  Ref: ConnectionArn
+                FullRepositoryId:
+                  Ref: FullRepositoryId
+                BranchName: main
+              RunOrder: '1'
+        - Name: Deploy
+          Actions:
+            - Name: DeployAction
+              InputArtifacts:
+                - Name: SourceOutput
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Version: '1'
+                Provider: CodeDeploy
+              Configuration:
+                ApplicationName:
+                  Ref: CodeDeployApplication
+                DeploymentGroupName:
+                  Ref: CodeDeploymentGroup
+              RunOrder: '1'
